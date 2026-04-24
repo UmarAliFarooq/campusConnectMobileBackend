@@ -336,8 +336,10 @@ namespace APPLICATION_BACKEND.Services
         public async Task<ShopkeeperDashboardStatsDto> GetShopkeeperDashboardStatsAsync(long shopkeeperId)
         {
             var shopkeeperExists = await _context.Users.AnyAsync(u =>
-                u.UserId == shopkeeperId && u.IsActive &&
-                u.RoleName.Equals("SHOPKEEPER", StringComparison.OrdinalIgnoreCase));
+                u.UserId == shopkeeperId &&
+                u.IsActive &&
+                u.RoleName != null &&
+                u.RoleName.ToUpper() == "SHOPKEEPER");
             if (!shopkeeperExists)
                 throw new ArgumentException("Shopkeeper not found or inactive.");
 
@@ -345,30 +347,44 @@ namespace APPLICATION_BACKEND.Services
                 .Where(o => o.ShopkeeperId == shopkeeperId)
                 .ToListAsync();
 
-            bool IsNewOrder(string s) =>
-                s.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("New", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("PLACED", StringComparison.OrdinalIgnoreCase);
+            bool IsNewOrder(string? s) =>
+                !string.IsNullOrWhiteSpace(s) && (
+                    s.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+                    s.Equals("New", StringComparison.OrdinalIgnoreCase) ||
+                    s.Equals("PLACED", StringComparison.OrdinalIgnoreCase));
 
-            bool IsTerminal(string s) =>
-                s.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("Completed", StringComparison.OrdinalIgnoreCase);
+            bool IsTerminal(string? s) =>
+                !string.IsNullOrWhiteSpace(s) && (
+                    s.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                    s.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                    s.Equals("Completed", StringComparison.OrdinalIgnoreCase));
 
             int newOrders = orders.Count(o => IsNewOrder(o.OrderStatus));
-            int processing = orders.Count(o => !IsTerminal(o.OrderStatus) && !IsNewOrder(o.OrderStatus));
+            int processing = orders.Count(o =>
+                !string.IsNullOrWhiteSpace(o.OrderStatus) &&
+                !IsTerminal(o.OrderStatus) &&
+                !IsNewOrder(o.OrderStatus));
 
-            var paidOrderIds = orders
-                .Where(o => o.PaymentStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase) ||
-                            o.PaymentStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            // Income: delivered / completed orders, or paid (each order counted once)
+            var incomeOrderIds = orders
+                .Where(o => !string.IsNullOrWhiteSpace(o.OrderStatus) &&
+                            !o.OrderStatus.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) &&
+                            !o.OrderStatus.Equals("Rejected", StringComparison.OrdinalIgnoreCase))
+                .Where(o =>
+                    o.OrderStatus.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                    o.OrderStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrWhiteSpace(o.PaymentStatus) &&
+                     (o.PaymentStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase) ||
+                      o.PaymentStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase))))
                 .Select(o => o.OrderId)
+                .Distinct()
                 .ToList();
 
             int income = 0;
-            if (paidOrderIds.Count > 0)
+            if (incomeOrderIds.Count > 0)
             {
                 income = await _context.OrderItems
-                    .Where(oi => paidOrderIds.Contains(oi.OrderId))
+                    .Where(oi => incomeOrderIds.Contains(oi.OrderId))
                     .SumAsync(oi =>
                         (oi.UnitPrice ?? 0) * (oi.Quantity ?? 0) - (oi.Discount ?? 0));
             }
@@ -379,6 +395,167 @@ namespace APPLICATION_BACKEND.Services
                 ProcessingOrdersCount = processing,
                 TotalIncome = income
             };
+        }
+
+        public async Task<IEnumerable<OrderResponseDto>> GetOrdersByShopkeeperAsync(long shopkeeperId)
+        {
+            await EnsureShopkeeperExistsAsync(shopkeeperId);
+
+            var orderIds = await _context.Orders
+                .Where(o => o.ShopkeeperId == shopkeeperId)
+                .OrderByDescending(o => o.OrderId)
+                .Select(o => o.OrderId)
+                .ToListAsync();
+
+            var list = new List<OrderResponseDto>();
+            foreach (var id in orderIds)
+            {
+                var dto = await GetOrderByIdAsync(id);
+                if (dto != null)
+                    list.Add(dto);
+            }
+
+            return list;
+        }
+
+        public async Task<OrderResponseDto?> AcceptOrderAsync(long orderId, long shopkeeperId)
+        {
+            await EnsureShopkeeperExistsAsync(shopkeeperId);
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var order = await _context.Orders.FindAsync(orderId);
+                if (order == null || order.ShopkeeperId != shopkeeperId)
+                    return null;
+
+                if (!IsNewOrderStatus(order.OrderStatus))
+                    throw new ArgumentException("Only new / pending orders can be accepted.");
+
+                var lines = await _context.OrderItems.Where(oi => oi.OrderId == orderId).ToListAsync();
+                foreach (var oi in lines)
+                {
+                    var product = await _context.ProductCategoryItems.FindAsync(oi.ProductCategoryItemId);
+                    if (product == null)
+                        throw new ArgumentException($"Product {oi.ProductCategoryItemId} not found.");
+
+                    var need = (int)(oi.Quantity ?? 0);
+                    if (need <= 0)
+                        continue;
+
+                    if (product.Quantity < need)
+                        throw new ArgumentException($"Insufficient stock for \"{product.Name}\". Have {product.Quantity}, need {need}.");
+
+                    product.Quantity -= need;
+                    product.DateUpdated = DateTime.UtcNow;
+                }
+
+                order.OrderStatus = "Processing";
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return await GetOrderByIdAsync(orderId);
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+
+        public async Task<OrderResponseDto?> RejectOrderAsync(long orderId, long shopkeeperId)
+        {
+            await EnsureShopkeeperExistsAsync(shopkeeperId);
+
+            var order = await _context.Orders.FindAsync(orderId);
+            if (order == null || order.ShopkeeperId != shopkeeperId)
+                return null;
+
+            if (!IsNewOrderStatus(order.OrderStatus))
+                throw new ArgumentException("Only new / pending orders can be rejected.");
+
+            order.OrderStatus = "Cancelled";
+            await _context.SaveChangesAsync();
+
+            return await GetOrderByIdAsync(orderId);
+        }
+
+        public async Task<OrderResponseDto?> ShopkeeperSetOrderStatusAsync(long orderId, long shopkeeperId, string nextStatus)
+        {
+            await EnsureShopkeeperExistsAsync(shopkeeperId);
+
+            if (string.IsNullOrWhiteSpace(nextStatus))
+                throw new ArgumentException("Next status is required.");
+
+            var normalized = nextStatus.Trim();
+            var order = await _context.Orders.FindAsync(orderId);
+            if (order == null || order.ShopkeeperId != shopkeeperId)
+                return null;
+
+            var current = order.OrderStatus ?? string.Empty;
+
+            // Allowed: Processing -> ReadyForDelivery; ReadyForDelivery -> Delivered; Processing -> Delivered
+            if (IsNewOrderStatus(current))
+                throw new ArgumentException("Accept the order first before changing kitchen status.");
+
+            if (current.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                current.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                current.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("This order cannot be updated.");
+
+            var next = NormalizeShopkeeperStatus(normalized);
+
+            if (next.Equals("ReadyForDelivery", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!current.Equals("Processing", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Can only move to Ready for delivery from Processing.");
+                order.OrderStatus = "ReadyForDelivery";
+            }
+            else if (next.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                     next.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!current.Equals("Processing", StringComparison.OrdinalIgnoreCase) &&
+                    !current.Equals("ReadyForDelivery", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Invalid transition to delivered.");
+
+                order.OrderStatus = "Delivered";
+                order.PaymentStatus = "Paid";
+            }
+            else
+                throw new ArgumentException($"Unsupported status: {normalized}");
+
+            await _context.SaveChangesAsync();
+            return await GetOrderByIdAsync(orderId);
+        }
+
+        private static string NormalizeShopkeeperStatus(string s)
+        {
+            var t = s.Trim();
+            if (t.Equals("Ready for delivery", StringComparison.OrdinalIgnoreCase) ||
+                t.Equals("ReadyForPickup", StringComparison.OrdinalIgnoreCase))
+                return "ReadyForDelivery";
+            if (t.Equals("Complete", StringComparison.OrdinalIgnoreCase))
+                return "Delivered";
+            return t;
+        }
+
+        private static bool IsNewOrderStatus(string? s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            return s.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+                   s.Equals("New", StringComparison.OrdinalIgnoreCase) ||
+                   s.Equals("PLACED", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task EnsureShopkeeperExistsAsync(long shopkeeperId)
+        {
+            var ok = await _context.Users.AnyAsync(u =>
+                u.UserId == shopkeeperId &&
+                u.IsActive &&
+                u.RoleName != null &&
+                u.RoleName.ToUpper() == "SHOPKEEPER");
+            if (!ok)
+                throw new ArgumentException("Shopkeeper not found or inactive.");
         }
 
         private async Task<OrderResponseDto> MapToOrderResponseDto(Order order)
@@ -434,7 +611,10 @@ namespace APPLICATION_BACKEND.Services
             // Get product category item manually
             var product = await _context.ProductCategoryItems.FindAsync(orderItem.ProductCategoryItemId);
 
-            var totalPrice = (orderItem.UnitPrice * orderItem.Quantity) - orderItem.Discount;
+            var qty = orderItem.Quantity ?? 0;
+            var unit = orderItem.UnitPrice ?? 0;
+            var disc = orderItem.Discount ?? 0;
+            var totalPrice = unit * qty - disc;
 
             return new OrderItemResponseDto
             {
@@ -443,10 +623,10 @@ namespace APPLICATION_BACKEND.Services
                 ProductCategoryItemId = orderItem.ProductCategoryItemId,
                 ProductCategoryItemName = product?.Name ?? "Unknown",
                 ProductCategoryItemPrice = product?.Price ?? 0,
-                Quantity = (int)orderItem.Quantity,
-                Discount = (int)orderItem.Discount,
-                UnitPrice = (int)orderItem.UnitPrice,
-                TotalPrice = (int)totalPrice
+                Quantity = qty,
+                Discount = disc,
+                UnitPrice = unit,
+                TotalPrice = totalPrice
             };
         }
     }

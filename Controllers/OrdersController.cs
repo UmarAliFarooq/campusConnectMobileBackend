@@ -74,6 +74,90 @@ namespace APPLICATION_BACKEND.Controllers
             }
         }
 
+        [HttpGet("shopkeeper/{shopkeeperId}/orders")]
+        public async Task<IActionResult> GetOrdersByShopkeeper(long shopkeeperId)
+        {
+            try
+            {
+                var orders = await _orderService.GetOrdersByShopkeeperAsync(shopkeeperId);
+                return SuccessResponse(orders, "Shopkeeper orders retrieved successfully");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while retrieving shopkeeper orders: {ex.Message}");
+            }
+        }
+
+        [HttpPost("shopkeeper/{shopkeeperId}/orders/{orderId}/accept")]
+        public async Task<IActionResult> AcceptShopkeeperOrder(long shopkeeperId, long orderId)
+        {
+            try
+            {
+                var updated = await _orderService.AcceptOrderAsync(orderId, shopkeeperId);
+                if (updated == null)
+                    return ErrorResponse($"Order with ID {orderId} not found.");
+
+                return SuccessResponse(updated, "Order accepted and moved to processing");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while accepting the order: {ex.Message}");
+            }
+        }
+
+        [HttpPost("shopkeeper/{shopkeeperId}/orders/{orderId}/reject")]
+        public async Task<IActionResult> RejectShopkeeperOrder(long shopkeeperId, long orderId)
+        {
+            try
+            {
+                var updated = await _orderService.RejectOrderAsync(orderId, shopkeeperId);
+                if (updated == null)
+                    return ErrorResponse($"Order with ID {orderId} not found.");
+
+                return SuccessResponse(updated, "Order rejected");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while rejecting the order: {ex.Message}");
+            }
+        }
+
+        [HttpPost("shopkeeper/{shopkeeperId}/orders/{orderId}/status")]
+        public async Task<IActionResult> ShopkeeperSetOrderStatus(long shopkeeperId, long orderId, [FromBody] ShopkeeperOrderStatusDto body)
+        {
+            if (body == null || string.IsNullOrWhiteSpace(body.NextStatus))
+                return ErrorResponse("NextStatus is required");
+
+            try
+            {
+                var updated = await _orderService.ShopkeeperSetOrderStatusAsync(orderId, shopkeeperId, body.NextStatus);
+                if (updated == null)
+                    return ErrorResponse($"Order with ID {orderId} not found.");
+
+                return SuccessResponse(updated, "Order status updated");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while updating order status: {ex.Message}");
+            }
+        }
+
         [HttpGet("{orderId}")]
         public async Task<IActionResult> GetOrderById(long orderId)
         {

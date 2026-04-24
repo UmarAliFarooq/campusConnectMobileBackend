@@ -17,5 +17,9 @@ namespace APPLICATION_BACKEND.Interfaces
         Task<bool> UpdateOrderItemAsync(long orderId, long orderItemId, OrderItemUpdateDto orderItemUpdateDto);
         Task<bool> RemoveOrderItemAsync(long orderId, long orderItemId);
         Task<ShopkeeperDashboardStatsDto> GetShopkeeperDashboardStatsAsync(long shopkeeperId);
+        Task<IEnumerable<OrderResponseDto>> GetOrdersByShopkeeperAsync(long shopkeeperId);
+        Task<OrderResponseDto?> AcceptOrderAsync(long orderId, long shopkeeperId);
+        Task<OrderResponseDto?> RejectOrderAsync(long orderId, long shopkeeperId);
+        Task<OrderResponseDto?> ShopkeeperSetOrderStatusAsync(long orderId, long shopkeeperId, string nextStatus);
     }
 }
