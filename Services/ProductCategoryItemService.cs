@@ -41,6 +41,13 @@ namespace APPLICATION_BACKEND.Services
             if (!categoryExists)
                 throw new ArgumentException($"Product category with ID {productCategoryItemCreateDto.ProductCategoryId} not found.");
 
+            var shopkeeper = await _context.Users.FirstOrDefaultAsync(u =>
+                u.UserId == productCategoryItemCreateDto.ShopkeeperId && u.IsActive);
+            if (shopkeeper == null)
+                throw new ArgumentException($"Shopkeeper with ID {productCategoryItemCreateDto.ShopkeeperId} not found or inactive.");
+            if (!shopkeeper.RoleName.Equals("SHOPKEEPER", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("The specified user is not a shopkeeper.");
+
             var item = new ProductCategoryItem
             {
                 Name = productCategoryItemCreateDto.Name,
@@ -50,6 +57,7 @@ namespace APPLICATION_BACKEND.Services
                 IsAvailable = productCategoryItemCreateDto.IsAvailable,
                 ImageUrl = productCategoryItemCreateDto.ImageUrl,
                 ProductCategoryId = productCategoryItemCreateDto.ProductCategoryId,
+                ShopkeeperId = productCategoryItemCreateDto.ShopkeeperId,
                 DateAdded = DateTime.UtcNow,
                 DateUpdated = null
             };
@@ -161,6 +169,22 @@ namespace APPLICATION_BACKEND.Services
             return responseDtos;
         }
 
+        public async Task<IEnumerable<ProductCategoryItemResponseDto>> GetItemsByShopkeeperAsync(long shopkeeperId)
+        {
+            var items = await _context.ProductCategoryItems
+                .Where(item => item.ShopkeeperId == shopkeeperId)
+                .OrderByDescending(item => item.DateAdded)
+                .ToListAsync();
+
+            var responseDtos = new List<ProductCategoryItemResponseDto>();
+            foreach (var item in items)
+            {
+                responseDtos.Add(await MapToProductCategoryItemResponseDto(item));
+            }
+
+            return responseDtos;
+        }
+
         private async Task<ProductCategoryItemResponseDto> MapToProductCategoryItemResponseDto(ProductCategoryItem item)
         {
             // Get category information manually
@@ -176,6 +200,7 @@ namespace APPLICATION_BACKEND.Services
                 IsAvailable = item.IsAvailable,
                 ImageUrl = item.ImageUrl,
                 ProductCategoryId = item.ProductCategoryId,
+                ShopkeeperId = item.ShopkeeperId,
                 CategoryName = category?.Name ?? "Unknown",
                 DateAdded = item.DateAdded,
                 DateUpdated = item.DateUpdated

@@ -16,5 +16,6 @@ namespace APPLICATION_BACKEND.Interfaces
         Task<OrderResponseDto?> AddOrderItemAsync(long orderId, OrderItemCreateDto orderItemCreateDto);
         Task<bool> UpdateOrderItemAsync(long orderId, long orderItemId, OrderItemUpdateDto orderItemUpdateDto);
         Task<bool> RemoveOrderItemAsync(long orderId, long orderItemId);
+        Task<ShopkeeperDashboardStatsDto> GetShopkeeperDashboardStatsAsync(long shopkeeperId);
     }
 }

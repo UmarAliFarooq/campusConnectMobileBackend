@@ -56,6 +56,24 @@ namespace APPLICATION_BACKEND.Controllers
             }
         }
 
+        [HttpGet("shopkeeper/{shopkeeperId}/dashboard-stats")]
+        public async Task<IActionResult> GetShopkeeperDashboardStats(long shopkeeperId)
+        {
+            try
+            {
+                var stats = await _orderService.GetShopkeeperDashboardStatsAsync(shopkeeperId);
+                return SuccessResponse(stats, "Dashboard statistics retrieved successfully");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while retrieving dashboard statistics: {ex.Message}");
+            }
+        }
+
         [HttpGet("{orderId}")]
         public async Task<IActionResult> GetOrderById(long orderId)
         {

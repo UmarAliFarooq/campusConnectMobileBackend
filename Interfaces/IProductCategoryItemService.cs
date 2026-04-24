@@ -12,5 +12,6 @@ namespace APPLICATION_BACKEND.Interfaces
         Task<IEnumerable<ProductCategoryItemResponseDto>> GetItemsByCategoryAsync(long productCategoryId);
         Task<IEnumerable<ProductCategoryItemResponseDto>> GetAvailableItemsAsync();
         Task<IEnumerable<ProductCategoryItemResponseDto>> GetAvailableItemsByCategoryAsync(long productCategoryId);
+        Task<IEnumerable<ProductCategoryItemResponseDto>> GetItemsByShopkeeperAsync(long shopkeeperId);
     }
 }

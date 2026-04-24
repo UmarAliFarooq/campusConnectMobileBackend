@@ -1,3 +1,4 @@
+using System;
 using Microsoft.EntityFrameworkCore;
 using APPLICATION_BACKEND.Database;
 using APPLICATION_BACKEND.DTOs;
@@ -330,6 +331,54 @@ namespace APPLICATION_BACKEND.Services
             await _context.SaveChangesAsync();
 
             return true;
+        }
+
+        public async Task<ShopkeeperDashboardStatsDto> GetShopkeeperDashboardStatsAsync(long shopkeeperId)
+        {
+            var shopkeeperExists = await _context.Users.AnyAsync(u =>
+                u.UserId == shopkeeperId && u.IsActive &&
+                u.RoleName.Equals("SHOPKEEPER", StringComparison.OrdinalIgnoreCase));
+            if (!shopkeeperExists)
+                throw new ArgumentException("Shopkeeper not found or inactive.");
+
+            var orders = await _context.Orders
+                .Where(o => o.ShopkeeperId == shopkeeperId)
+                .ToListAsync();
+
+            bool IsNewOrder(string s) =>
+                s.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("New", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("PLACED", StringComparison.OrdinalIgnoreCase);
+
+            bool IsTerminal(string s) =>
+                s.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Completed", StringComparison.OrdinalIgnoreCase);
+
+            int newOrders = orders.Count(o => IsNewOrder(o.OrderStatus));
+            int processing = orders.Count(o => !IsTerminal(o.OrderStatus) && !IsNewOrder(o.OrderStatus));
+
+            var paidOrderIds = orders
+                .Where(o => o.PaymentStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase) ||
+                            o.PaymentStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+                .Select(o => o.OrderId)
+                .ToList();
+
+            int income = 0;
+            if (paidOrderIds.Count > 0)
+            {
+                income = await _context.OrderItems
+                    .Where(oi => paidOrderIds.Contains(oi.OrderId))
+                    .SumAsync(oi =>
+                        (oi.UnitPrice ?? 0) * (oi.Quantity ?? 0) - (oi.Discount ?? 0));
+            }
+
+            return new ShopkeeperDashboardStatsDto
+            {
+                NewOrdersCount = newOrders,
+                ProcessingOrdersCount = processing,
+                TotalIncome = income
+            };
         }
 
         private async Task<OrderResponseDto> MapToOrderResponseDto(Order order)

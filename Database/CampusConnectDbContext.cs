@@ -109,6 +109,7 @@ public partial class CampusConnectDbContext : DbContext
             entity.Property(e => e.Price).HasColumnName("PRICE");
             entity.Property(e => e.ProductCategoryId).HasColumnName("PRODUCT_CATEGORY_ID");
             entity.Property(e => e.Quantity).HasColumnName("QUANTITY");
+            entity.Property(e => e.ShopkeeperId).HasColumnName("SHOPKEEPER_ID");
         });
 
         modelBuilder.Entity<SystemRole>(entity =>

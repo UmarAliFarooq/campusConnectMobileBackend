@@ -27,6 +27,10 @@ namespace APPLICATION_BACKEND.DTOs
         [Required]
         [Range(1, long.MaxValue, ErrorMessage = "Product category ID is required")]
         public long ProductCategoryId { get; set; }
+
+        [Required]
+        [Range(1, long.MaxValue, ErrorMessage = "Shopkeeper ID is required")]
+        public long ShopkeeperId { get; set; }
     }
 
     public class ProductCategoryItemUpdateDto
@@ -63,6 +67,7 @@ namespace APPLICATION_BACKEND.DTOs
         public bool IsAvailable { get; set; }
         public string? ImageUrl { get; set; }
         public long ProductCategoryId { get; set; }
+        public long? ShopkeeperId { get; set; }
         public string CategoryName { get; set; } = string.Empty;
         public DateTime DateAdded { get; set; }
         public DateTime? DateUpdated { get; set; }

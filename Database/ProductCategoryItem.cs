@@ -9,6 +9,8 @@ public partial class ProductCategoryItem
 
     public long ProductCategoryId { get; set; }
 
+    public long? ShopkeeperId { get; set; }
+
     public string Name { get; set; } = null!;
 
     public int Price { get; set; }

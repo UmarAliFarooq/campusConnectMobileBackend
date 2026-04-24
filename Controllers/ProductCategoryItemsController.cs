@@ -70,6 +70,20 @@ namespace APPLICATION_BACKEND.Controllers
             }
         }
 
+        [HttpGet("shopkeeper/{shopkeeperId}")]
+        public async Task<IActionResult> GetItemsByShopkeeper(long shopkeeperId)
+        {
+            try
+            {
+                var items = await _productCategoryItemService.GetItemsByShopkeeperAsync(shopkeeperId);
+                return SuccessResponse(items, $"Product items for shopkeeper {shopkeeperId} retrieved successfully");
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while retrieving shopkeeper products: {ex.Message}");
+            }
+        }
+
         [HttpGet("{productCategoryItemId}")]
         public async Task<IActionResult> GetProductCategoryItemById(long productCategoryItemId)
         {
