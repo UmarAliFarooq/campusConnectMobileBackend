@@ -135,6 +135,11 @@ namespace APPLICATION_BACKEND.DTOs
         public List<OrderItemResponseDto> OrderItems { get; set; } = new List<OrderItemResponseDto>();
         public int TotalAmount { get; set; }
         public int DiscountAmount { get; set; }
+
+        /// <summary>Flat delivery fee (PKR) when <see cref="OrderPickupType"/> is Delivery; 0 for pickup.</summary>
+        public int DeliveryFee { get; set; }
+
+        /// <summary>Items total minus discounts plus <see cref="DeliveryFee"/>.</summary>
         public int FinalAmount { get; set; }
     }
 }

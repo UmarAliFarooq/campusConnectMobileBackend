@@ -21,5 +21,15 @@ namespace APPLICATION_BACKEND.Interfaces
         Task<OrderResponseDto?> AcceptOrderAsync(long orderId, long shopkeeperId);
         Task<OrderResponseDto?> RejectOrderAsync(long orderId, long shopkeeperId);
         Task<OrderResponseDto?> ShopkeeperSetOrderStatusAsync(long orderId, long shopkeeperId, string nextStatus);
+
+        Task<DelivererDashboardStatsDto> GetDelivererDashboardStatsAsync(long delivererId);
+
+        Task<IEnumerable<OrderResponseDto>> GetUnassignedDeliveryPoolAsync(long delivererId);
+
+        Task<IEnumerable<OrderResponseDto>> GetDelivererActiveOrdersAsync(long delivererId);
+
+        Task<OrderResponseDto?> DelivererAcceptOrderAsync(long orderId, long delivererId);
+
+        Task<OrderResponseDto?> DelivererCompleteDeliveryAsync(long orderId, long delivererId);
     }
 }
