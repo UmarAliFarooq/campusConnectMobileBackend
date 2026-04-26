@@ -24,11 +24,17 @@ namespace APPLICATION_BACKEND.Interfaces
 
         Task<DelivererDashboardStatsDto> GetDelivererDashboardStatsAsync(long delivererId);
 
+        /// <summary>All unassigned delivery runs: Delivery pickup type, ReadyForDelivery, DelivererId null/0.</summary>
+        Task<IEnumerable<OrderResponseDto>> GetOpenDeliveryPoolAsync();
+
         Task<IEnumerable<OrderResponseDto>> GetUnassignedDeliveryPoolAsync(long delivererId);
 
         Task<IEnumerable<OrderResponseDto>> GetDelivererActiveOrdersAsync(long delivererId);
 
         Task<OrderResponseDto?> DelivererAcceptOrderAsync(long orderId, long delivererId);
+
+        /// <summary>After rider pays shopkeeper at pickup; moves to EnRouteToCustomer.</summary>
+        Task<OrderResponseDto?> DelivererConfirmShopkeeperCashAsync(long orderId, long delivererId);
 
         Task<OrderResponseDto?> DelivererCompleteDeliveryAsync(long orderId, long delivererId);
     }

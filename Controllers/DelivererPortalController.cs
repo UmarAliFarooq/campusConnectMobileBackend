@@ -35,8 +35,25 @@ namespace APPLICATION_BACKEND.Controllers
             }
         }
 
-        [HttpGet("{delivererId:long}/delivery-pool")]
-        public async Task<IActionResult> GetDeliveryPool(long delivererId)
+        /// <summary>
+        /// Global delivery pool: pickup type Delivery, status ReadyForDelivery, no rider assigned (DelivererId null/0).
+        /// Does not take delivererId — the list is the same for every rider.
+        /// </summary>
+        [HttpGet("open-delivery-pool")]
+        public async Task<IActionResult> GetOpenDeliveryPool()
+        {
+            try
+            {
+                var orders = await _orderService.GetOpenDeliveryPoolAsync();
+                return SuccessResponse(orders, "Unassigned delivery orders retrieved successfully");
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while retrieving the delivery pool: {ex.Message}");
+            }
+        }
+
+        private async Task<IActionResult> UnassignedDeliveryPoolAsync(long delivererId)
         {
             try
             {
@@ -52,6 +69,13 @@ namespace APPLICATION_BACKEND.Controllers
                 return ErrorResponse($"An error occurred while retrieving the delivery pool: {ex.Message}");
             }
         }
+
+        [HttpGet("{delivererId:long}/delivery-pool")]
+        public Task<IActionResult> GetDeliveryPool(long delivererId) => UnassignedDeliveryPoolAsync(delivererId);
+
+        /// <summary>Same payload as open-delivery-pool; delivererId only validates the rider account exists.</summary>
+        [HttpGet("{delivererId:long}/new-orders")]
+        public Task<IActionResult> GetNewOrdersPool(long delivererId) => UnassignedDeliveryPoolAsync(delivererId);
 
         [HttpGet("{delivererId:long}/active-orders")]
         public async Task<IActionResult> GetActiveOrders(long delivererId)
@@ -89,6 +113,30 @@ namespace APPLICATION_BACKEND.Controllers
             catch (Exception ex)
             {
                 return ErrorResponse($"An error occurred while accepting the order: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Rider confirms they paid the shopkeeper the food amount at pickup; order moves to EnRouteToCustomer.
+        /// </summary>
+        [HttpPost("{delivererId:long}/orders/{orderId:long}/confirm-shopkeeper-cash")]
+        public async Task<IActionResult> ConfirmShopkeeperCash(long delivererId, long orderId)
+        {
+            try
+            {
+                var updated = await _orderService.DelivererConfirmShopkeeperCashAsync(orderId, delivererId);
+                if (updated == null)
+                    return ErrorResponse($"Order with ID {orderId} not found or not assigned to you.");
+
+                return SuccessResponse(updated, "Shopkeeper cash recorded — continue to the customer.");
+            }
+            catch (ArgumentException ex)
+            {
+                return ErrorResponse(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ErrorResponse($"An error occurred while confirming shopkeeper payment: {ex.Message}");
             }
         }
 

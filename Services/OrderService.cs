@@ -17,9 +17,17 @@ namespace APPLICATION_BACKEND.Services
             _context = context;
         }
 
-        private static bool IsDeliveryPickupType(string? orderPickupType) =>
-            !string.IsNullOrWhiteSpace(orderPickupType) &&
-            orderPickupType.Equals("Delivery", StringComparison.OrdinalIgnoreCase);
+        /// <summary>
+        /// True when the order is a delivery (customer pays rider fee). Trims/pads for SQL char columns.
+        /// </summary>
+        private static bool IsDeliveryPickupType(string? orderPickupType)
+        {
+            if (string.IsNullOrWhiteSpace(orderPickupType)) return false;
+            return orderPickupType.Trim().Equals("Delivery", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeOrderStatusKey(string? orderStatus) =>
+            (orderStatus ?? "").Replace(" ", string.Empty).ToLowerInvariant();
 
         public async Task<IEnumerable<OrderResponseDto>> GetAllOrdersAsync()
         {
@@ -372,28 +380,34 @@ namespace APPLICATION_BACKEND.Services
                 var s = o.OrderStatus ?? string.Empty;
                 if (IsNewOrder(s) || IsTerminal(s))
                     return false;
-                var sl = s.Replace(" ", "", StringComparison.OrdinalIgnoreCase);
-                if (sl.Equals("readyfordelivery", StringComparison.OrdinalIgnoreCase) &&
-                    IsDeliveryPickupType(o.OrderPickupType))
-                    return false; // in rider pool — shop side done
-                if (sl.Equals("riderpickup", StringComparison.OrdinalIgnoreCase))
-                    return false; // deliverer en route
+                var sk = NormalizeOrderStatusKey(s);
+                // Delivery: shopkeeper stays in "processing" until rider pays them at pickup (EnRouteToCustomer).
+                if (IsDeliveryPickupType(o.OrderPickupType) && sk == "enroutetocustomer")
+                    return false;
                 return true;
             }
 
             int processing = orders.Count(IsShopkeeperKitchenQueue);
 
-            // Income: delivered / completed orders, or paid (each order counted once)
+            // Income: pickup — completed/delivered/paid. Delivery — food counted once rider settled shop (EnRouteToCustomer+) or legacy Delivered-only.
             var incomeOrderIds = orders
                 .Where(o => !string.IsNullOrWhiteSpace(o.OrderStatus) &&
                             !o.OrderStatus.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) &&
                             !o.OrderStatus.Equals("Rejected", StringComparison.OrdinalIgnoreCase))
                 .Where(o =>
-                    o.OrderStatus.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
-                    o.OrderStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
-                    (!string.IsNullOrWhiteSpace(o.PaymentStatus) &&
-                     (o.PaymentStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase) ||
-                      o.PaymentStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase))))
+                {
+                    if (IsDeliveryPickupType(o.OrderPickupType))
+                    {
+                        var sk = NormalizeOrderStatusKey(o.OrderStatus);
+                        return sk == "enroutetocustomer" || sk == "delivered";
+                    }
+
+                    return o.OrderStatus.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ||
+                           o.OrderStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
+                           (!string.IsNullOrWhiteSpace(o.PaymentStatus) &&
+                            (o.PaymentStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase) ||
+                             o.PaymentStatus.Equals("Completed", StringComparison.OrdinalIgnoreCase)));
+                })
                 .Select(o => o.OrderId)
                 .Distinct()
                 .ToList();
@@ -556,6 +570,20 @@ namespace APPLICATION_BACKEND.Services
             return await GetOrderByIdAsync(orderId);
         }
 
+        /// <summary>Customer total (food after line math + delivery fee) matching <see cref="MapToOrderResponseDto"/>.</summary>
+        private async Task<int> ComputeCustomerPayTotalPkrAsync(long orderId, string? orderPickupType)
+        {
+            var orderItems = await _context.OrderItems.Where(oi => oi.OrderId == orderId).ToListAsync();
+            var lineDtos = new List<OrderItemResponseDto>();
+            foreach (var item in orderItems)
+                lineDtos.Add(await MapToOrderItemResponseDto(item));
+
+            int totalAmount = lineDtos.Sum(oi => oi.TotalPrice);
+            int discountAmount = lineDtos.Sum(oi => oi.Discount * oi.Quantity);
+            int deliveryFee = IsDeliveryPickupType(orderPickupType) ? DeliveryFlatFeePkr : 0;
+            return totalAmount - discountAmount + deliveryFee;
+        }
+
         public async Task<DelivererDashboardStatsDto> GetDelivererDashboardStatsAsync(long delivererId)
         {
             await EnsureDelivererExistsAsync(delivererId);
@@ -566,28 +594,45 @@ namespace APPLICATION_BACKEND.Services
 
             int completed = mine.Count(o =>
                 IsDeliveryPickupType(o.OrderPickupType) &&
-                o.OrderStatus.Equals("Delivered", StringComparison.OrdinalIgnoreCase));
+                NormalizeOrderStatusKey(o.OrderStatus) == "delivered");
 
-            int active = mine.Count(o =>
-                o.OrderStatus.Equals("RiderPickup", StringComparison.OrdinalIgnoreCase));
+            int activeRuns = 0;
+            int codHold = 0;
+            foreach (var o in mine)
+            {
+                if (!IsDeliveryPickupType(o.OrderPickupType))
+                    continue;
+                var sk = NormalizeOrderStatusKey(o.OrderStatus);
+                if (sk is not ("riderpickup" or "enroutetocustomer"))
+                    continue;
+                activeRuns++;
+                codHold += await ComputeCustomerPayTotalPkrAsync(o.OrderId, o.OrderPickupType);
+            }
+
+            int riderEarnings = completed * DeliveryFlatFeePkr;
 
             return new DelivererDashboardStatsDto
             {
-                TotalEarnings = completed * DeliveryFlatFeePkr,
-                ActiveOrdersCount = active,
+                ActiveCodHoldPkr = codHold,
+                TotalDeliveryEarningsPkr = riderEarnings,
+                ActiveRunsCount = activeRuns,
+                CompletedDeliveriesCount = completed,
+                TotalEarnings = riderEarnings,
+                ActiveOrdersCount = activeRuns,
                 CompletedOrdersCount = completed
             };
         }
 
-        public async Task<IEnumerable<OrderResponseDto>> GetUnassignedDeliveryPoolAsync(long delivererId)
+        public async Task<IEnumerable<OrderResponseDto>> GetOpenDeliveryPoolAsync()
         {
-            await EnsureDelivererExistsAsync(delivererId);
-
+            // Match DB values even when ORDER_STATUS / ORDER_PICKUP_TYPE are char(n) with trailing spaces,
+            // or status was stored with spaces (e.g. "Ready For Delivery").
+            // EF Core cannot translate string.Equals(..., StringComparison). Use ToLower() (maps to SQL LOWER).
             var ids = await _context.Orders
                 .AsNoTracking()
                 .Where(o =>
-                    o.OrderStatus.Equals("ReadyForDelivery", StringComparison.OrdinalIgnoreCase) &&
-                    IsDeliveryPickupType(o.OrderPickupType) &&
+                    (o.OrderStatus ?? "").Replace(" ", "").ToLower() == "readyfordelivery" &&
+                    (o.OrderPickupType ?? "").Trim().ToLower() == "delivery" &&
                     (o.DelivererId == null || o.DelivererId == 0))
                 .OrderByDescending(o => o.OrderId)
                 .Select(o => o.OrderId)
@@ -604,6 +649,12 @@ namespace APPLICATION_BACKEND.Services
             return list;
         }
 
+        public async Task<IEnumerable<OrderResponseDto>> GetUnassignedDeliveryPoolAsync(long delivererId)
+        {
+            await EnsureDelivererExistsAsync(delivererId);
+            return await GetOpenDeliveryPoolAsync();
+        }
+
         public async Task<IEnumerable<OrderResponseDto>> GetDelivererActiveOrdersAsync(long delivererId)
         {
             await EnsureDelivererExistsAsync(delivererId);
@@ -611,7 +662,9 @@ namespace APPLICATION_BACKEND.Services
             var ids = await _context.Orders
                 .Where(o =>
                     o.DelivererId == delivererId &&
-                    o.OrderStatus.Equals("RiderPickup", StringComparison.OrdinalIgnoreCase))
+                    (
+                        (o.OrderStatus ?? "").Replace(" ", "").ToLower() == "riderpickup" ||
+                        (o.OrderStatus ?? "").Replace(" ", "").ToLower() == "enroutetocustomer"))
                 .OrderByDescending(o => o.OrderId)
                 .Select(o => o.OrderId)
                 .ToListAsync();
@@ -634,8 +687,8 @@ namespace APPLICATION_BACKEND.Services
             var rows = await _context.Orders
                 .Where(o =>
                     o.OrderId == orderId &&
-                    o.OrderStatus.Equals("ReadyForDelivery", StringComparison.OrdinalIgnoreCase) &&
-                    IsDeliveryPickupType(o.OrderPickupType) &&
+                    (o.OrderStatus ?? "").Replace(" ", "").ToLower() == "readyfordelivery" &&
+                    (o.OrderPickupType ?? "").Trim().ToLower() == "delivery" &&
                     (o.DelivererId == null || o.DelivererId == 0))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.DelivererId, delivererId)
@@ -643,6 +696,26 @@ namespace APPLICATION_BACKEND.Services
 
             if (rows == 0)
                 return null;
+
+            return await GetOrderByIdAsync(orderId);
+        }
+
+        public async Task<OrderResponseDto?> DelivererConfirmShopkeeperCashAsync(long orderId, long delivererId)
+        {
+            await EnsureDelivererExistsAsync(delivererId);
+
+            var order = await _context.Orders.FindAsync(orderId);
+            if (order == null || order.DelivererId != delivererId)
+                return null;
+
+            if (!IsDeliveryPickupType(order.OrderPickupType))
+                throw new ArgumentException("This action is only for delivery orders.");
+
+            if (NormalizeOrderStatusKey(order.OrderStatus) != "riderpickup")
+                throw new ArgumentException("Pay the shopkeeper only after you have accepted the run (RiderPickup).");
+
+            order.OrderStatus = "EnRouteToCustomer";
+            await _context.SaveChangesAsync();
 
             return await GetOrderByIdAsync(orderId);
         }
@@ -658,8 +731,9 @@ namespace APPLICATION_BACKEND.Services
             if (!IsDeliveryPickupType(order.OrderPickupType))
                 throw new ArgumentException("This action is only for delivery orders.");
 
-            if (!order.OrderStatus.Equals("RiderPickup", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Order must be out for delivery before marking delivered.");
+            if (NormalizeOrderStatusKey(order.OrderStatus) != "enroutetocustomer")
+                throw new ArgumentException(
+                    "Mark delivered only after you have paid the shopkeeper and picked up the order (EnRouteToCustomer).");
 
             order.OrderStatus = "Delivered";
             order.PaymentStatus = "Paid";
@@ -740,6 +814,7 @@ namespace APPLICATION_BACKEND.Services
             int discountAmount = orderItemResponseDtos.Sum(oi => oi.Discount * oi.Quantity);
             int deliveryFee = IsDeliveryPickupType(order.OrderPickupType) ? DeliveryFlatFeePkr : 0;
             int finalAmount = totalAmount - discountAmount + deliveryFee;
+            int foodNetForShopkeeper = totalAmount - discountAmount;
 
             return new OrderResponseDto
             {
@@ -762,7 +837,8 @@ namespace APPLICATION_BACKEND.Services
                 TotalAmount = totalAmount,
                 DiscountAmount = discountAmount,
                 DeliveryFee = deliveryFee,
-                FinalAmount = finalAmount
+                FinalAmount = finalAmount,
+                FoodNetForShopkeeper = foodNetForShopkeeper
             };
         }
 

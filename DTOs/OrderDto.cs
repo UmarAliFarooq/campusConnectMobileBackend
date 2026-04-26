@@ -141,5 +141,8 @@ namespace APPLICATION_BACKEND.DTOs
 
         /// <summary>Items total minus discounts plus <see cref="DeliveryFee"/>.</summary>
         public int FinalAmount { get; set; }
+
+        /// <summary>Food net (items − line discounts) owed to shopkeeper; excludes <see cref="DeliveryFee"/>.</summary>
+        public int FoodNetForShopkeeper { get; set; }
     }
 }
